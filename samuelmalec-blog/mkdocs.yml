@@ -1,0 +1,10 @@
+site_name: My Docs
+
+theme:
+  name: material
+
+nav:
+  - Home: index.md
+  - Posts:
+    - Compiler Dungeon: posts/compiler_dungeon.md
+    - Type Systems: posts/type_systems.md
