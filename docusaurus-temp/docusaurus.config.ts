@@ -1,0 +1,59 @@
+import type {Config} from '@docusaurus/types';
+import type * as Preset from '@docusaurus/preset-classic';
+
+const config: Config = {
+  title: 'ZJBlog',
+  tagline: 'Samuel Malec',
+  favicon: 'img/favicon.png',
+
+  url: 'https://YOUR-DOMAIN',
+  baseUrl: '/',
+
+  organizationName: 'YOUR-GITHUB-USERNAME',
+  projectName: 'YOUR-REPOSITORY',
+
+  onBrokenLinks: 'throw',
+
+  presets: [
+    [
+      'classic',
+      {
+        docs: false,
+
+        blog: {
+          showReadingTime: true,
+        },
+
+        theme: {
+          customCss: './src/css/custom.css',
+        },
+      } satisfies Preset.Options,
+    ],
+  ],
+
+  themeConfig: {
+    navbar: {
+      title: 'ZJBlog',
+      items: [
+        {
+          to: '/',
+          label: 'Home',
+          position: 'left',
+        },
+        {
+          to: '/blog',
+          label: 'Blog',
+          position: 'left',
+        },
+      ],
+    },
+
+    colorMode: {
+      defaultMode: 'light',
+      disableSwitch: false,
+      respectPrefersColorScheme: true,
+    },
+  },
+};
+
+export default config;
