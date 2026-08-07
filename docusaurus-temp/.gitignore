@@ -8,7 +8,7 @@
 .docusaurus
 .cache-loader
 /site
-cd 
+ 
 # Misc
 .DS_Store
 .env.local
