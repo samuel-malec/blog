@@ -1,7 +1,6 @@
-## Diplomka Proposal/Intro
-This document serves as a motivation and demonstration of use-cases of our work (as well as my personal notes since I forget a lot).
+This document serves as a motivation and demonstration of use-cases of our work (as well as my personal notes).
 
-# Graal IR Basics
+## Graal IR Basics
 Graal IR is a [sea-of-nodes](https://softlib.rice.edu/pub/CRPC-TRs/reports/CRPC-TR93366-S.pdf) (SoN) representation used by [GraalVM](https://www.graalvm.org/) compiler.
 It contains a large amount of [nodes](https://github.com/oracle/graal/blob/master/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/graph/Node.java). Each node roughly corresponds to a high level instruction such as arithmetic, memory access, or a function call.
  
@@ -10,7 +9,8 @@ Nodes are roughly divided into two kinds:
 - [Fixed](https://c9x.me/compile/bib/) nodes are pinned to a specific point in the control-flow order. They are connected to their neighbours via `successor` edges. `Invoke`, `If`, `Return`, and any node with side effects are typically fixed.
 - [Floating](https://github.com/oracle/graal/blob/5d2611cedf4c733020519b2f8feeb18a66344a5a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/nodes/calc/FloatingNode.java#L34) nodes are constrained only by their data dependencies (which are represented by `input` edges), not by any fixed position in control flow. 
 
-It is worth mentioning that the more nodes that can be classified as floating rather than fixed, the more freedom the scheduler and later optimization passes have, e.g. an `AddNode` with no side effects can float to whichever basic block is most profitable (such as being hoisted out of a loop). 
+The SoN representation was [introduced](https://www.researchgate.net/publication/2394127_Combining_Analyses_Combining_Optimizations) in order to battle the phase-ordering problem in optimizing compilers, e.g. how to order optimization passes.
+Basically, the more nodes that can be classified as floating rather than fixed, the more freedom the scheduler and later optimization passes have in reorganizing the code, e.g. an `AddNode` with no side effects can float to whichever basic block is most profitable (such as being hoisted out of a loop). 
  
 To demonstrate a simple Graal IR, suppose this Java program:
 ```java
@@ -40,7 +40,7 @@ this is because `Fibonacci.rec` is a recursive function, and Graal IR puts a sta
  
 To quickly find more detailed examples of Graal IR. Take a look at [this](https://chrisseaton.com/truffleruby/basic-graal-graphs/) nice blog post.
  
-# Case Study I - Graal Memory Model
+# Case Study I - Memory Accessing Operations
 
 Ok, now that we have introduced Graal IR, we can show a concrete limitation that we would like to mitigate, but for that we need to a little more theory behind how Graal IR models memory.
 
@@ -52,10 +52,15 @@ Every node that can write to memory implements either `SingleMemoryKill` (kills 
 - `NamedLocationIdentity` represents a named "family" of locations, e.g. all `int[]` elements, or a hand-picked identity for a class of internal VM fields.
 - `FieldLocationIdentity` represents one identity per declared field, shared across all instances of that field (i.e. still not per-object, but already narrower than `any()`).
 
-A memory operation's ordering relative to another (when talking about ordering we mean ordering on the `successor` relation) is decided purely by whether their identities overlap. Two operations that touch disjoint location identities may be reordered or interleaved freely, but two operations that (might) share a location identity must stay ordered.
-Currently one of the most apparent limitation is that an ordinary Java method call (`InvokeNode`) has no interprocedural information available to the compiler about what memory locations it touches, 
-so it is constructed with `identity = LocationIdentity.any()`. This makes every call a `SingleMemoryKill` on `any()`, i.e. a full memory barrier.
-To demonstrate, suppose this example: 
+Ordering of two memory operations relative to eachother is decided purely by whether their
+location identities overlap, but only for operations that are not already Fixed.
+Two consecutive fixed nodes (e.g. two `Invoke`s) always keep their relative
+position regardless of their location identities. 
+The `LocationIdentity` overlap comes into play when assessing how to schedule floating memory access relative to fixed memory kill nodes around it. 
+Two floating operations touching disjoint identities may be scheduled independently of each other and of
+any intervening kill they don't overlap withtwo that might share an identity
+must stay ordered relative to that kill.
+
 
 ```java
 public static class Demo {
@@ -94,16 +99,18 @@ It is obvious that `bump(counter)`'s write and `config.limit`'s read are touchin
 I know that there is a lot happening in this picture, and it's not really clear what to focus on in this picture, however, we can see a loop starting at `8 LoopBegin` node. 
 Then we can see linearly ordered memory operations with node ids `23, 24, 31`. This is strange because not only did Graal make the memory reads/writes fixed, but it also didn't hoist the read of config limit (Node 31) out of the loop.
 
+TODO: this is kinda vague
 Ok but why did this happen ? The thing is that the `bump(counter)` invoke messes up with the LocationIdentity - essentially it introduces a complete memory-barrier, and therefore both instructions are conservatively assumed to affect the same heap state, so Graal introduces a dependency between them. This is very costly, because inside the `process` method `config.limit` never changes across loop iterations, so the read is loop-invariant and should ideally be hoisted out of the loop. But because it's forced to depend on `bump`'s `any()` memory kill, it stays pinned inside the loop body. So clearly, the current mechanism how Invokes interfere with memory access nodes is a really big gap. I think that this gap is one of the things our research could try to mitigate.
 
 ## Intermezzo: How we might tackle this gap
-What Graal does already support is promoting **memory accesses** from fixed to floating form. This is the actual mechanism we want to reuse/extend:
+What Graal does already support is promoting memory accesses from fixed to floating form.
+This is the actual mechanism we would like to reuse/extend:
 
-- **`FloatingAccessNode`** is the floating counterpart of a fixed memory access. A fixed access such as `ReadNode` exposes `canFloat()`, and when it can, `asFloatingNode()` converts it into the equivalent `FloatingAccessNode`.
-- **`FloatingReadPhase`** is the compiler phase that performs this conversion. Its `FloatingReadClosure.processFloatable` walks the fixed-node schedule, and for every `FloatableAccessNode` that can float, looks up the current "last known kill" of its `LocationIdentity` in a per-location map (`MemoryMapImpl`), then calls `graph.replaceFixedWithFloating(accessNode, floatingNode)`. Crucially, every `SingleMemoryKill`/`MultiMemoryKill` node it walks past — including every `InvokeNode`, since it kills `any()` by default — updates (or, in the `any()` case, clears) this map, which is exactly what pins a read like `config.limit` to stay after `bump(counter)` in program order.
-- **`SchedulePhase`** is the phase that assigns floating nodes to basic blocks once they are floating. It does not decide where fixed nodes go — a fixed node's block is a mechanical consequence of the `successor` chain it already sits in (see `ControlFlowGraph.renumberBlocks`), and `SchedulePhase` explicitly treats a fixed node's earliest and latest legal block as identical, i.e. no freedom at all. What `SchedulePhase` actually computes is the *earliest*/*latest* legal block for each floating node — including newly-floated `FloatingReadNode`s — based on data dependencies (`scheduleEarliestIterative`) and, on the latest side, on which blocks are known to "kill" the node's `LocationIdentity` (`fillKillSet`/`checkKillsBetween`). A block containing an invoke that kills `any()` blocks *every* floating access from being scheduled past it, regardless of what that access actually touches.
+- **`FloatingAccessNode`** is the floating counterpart of a fixed memory access. A fixed access such as `ReadNode` exposes `canFloat()`, and when it can, `asFloatingNode()` converts it into the equivalent floating node.
+- **`FloatingReadPhase`** is the compiler phase that performs this conversion. It essientially walks the fixed nodes, and for every `FloatableAccessNode` that can float, looks up the current last known kill of its location identity in a per-location map.
+- **`SchedulePhase`** is the phase that assigns floating nodes to basic blocks once they are floating. It computes is the earliest/latest legal basic block for each floating node  based on data dependencies and, on the latest side, on which blocks are known to kill the node's `LocationIdentity`. A block containing an invoke that kills `any()` blocks every floating access from being scheduled past it, regardless of what that access actually touches.
 
-So the mechanism we intend to use is: **narrow the `LocationIdentity` that `InvokeNode`s report**, not change their fixed/floating status. `InvokeNode` already has a constructor overload accepting an explicit `LocationIdentity` instead of defaulting to `any()`. If a call's kill identity is narrowed based on points-to information (e.g. tagged with a `Counter`-heap token instead of `any()`), then:
+So we want to narrow the `LocationIdentity` that `InvokeNode`s report, not change their fixed/floating status. `InvokeNode` already has a constructor overload accepting an explicit `LocationIdentity` instead of defaulting to `any()`. If a call's kill identity is narrowed based on points-to information (e.g. tagged with a `Counter`-heap token instead of `any()`), then:
 
 - `FloatingReadClosure.processAccess`/`processCheckpoint` will only invalidate the map entry for that specific identity, instead of clearing the whole map — `config.limit`'s entry survives across the `bump(counter)` call.
 - `SchedulePhase`'s kill-set computation no longer treats every block containing `bump` as killing everything, so the read of `config.limit` becomes a legal candidate to float, hoist out of the loop, and get scheduled once instead of every iteration.
@@ -117,7 +124,13 @@ No changes to `FloatingReadPhase` or `SchedulePhase` themselves are required —
 - **Reducing reliance on aggressive inlining.** Industrial compilers lean on inlining small functions (getters/setters) specifically to extend the reach of local optimizations — at the cost of code bloat, worse instruction-cache behaviour, and AOT compile-time overhead. Lightweight interprocedural summaries (input/output side-effect tokens on the function prototype) let Graal optimize a call site without inlining the callee body.
 - **Unlocking LICM/CSE/DCE that are currently blocked.** Rigid control and memory-ordering edges between operations prevent loop-invariant reads from floating and prevent pure/repeated calls from being deduplicated or removed. Replacing those rigid edges with flexible data-dependency chains lets Graal's existing scheduler reorder and hoist freely.
 
-## Case Study II - Commuting calls
+## Case Study II: Dead Store Elimination
+```java
+static void unrelatedWork(Logger logger) { logger.count++; }
 
-
-## Conclusion and Future Goals
+static void resetCounter(Counter counter, Logger logger) {
+    counter.value = 1;
+    unrelatedWork(logger);
+    counter.value = 2;
+}
+```

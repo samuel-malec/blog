@@ -7,7 +7,7 @@ const config: Config = {
   favicon: 'img/favicon.png',
 
   url: 'https://samuel-malec.github.io',
-  baseUrl: '/',
+  baseUrl: '/personal-site/',
 
   organizationName: 'samuel-malec',
   projectName: 'personal-site',
