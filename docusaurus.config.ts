@@ -10,7 +10,7 @@ const config: Config = {
   baseUrl: '/blog/',
 
   organizationName: 'samuel-malec',
-  projectName: 'samuelmalec.github.io',
+  projectName: 'blog',
 
   onBrokenLinks: 'throw',
 
