@@ -6,11 +6,11 @@ const config: Config = {
   tagline: 'Samuel Malec',
   favicon: 'img/favicon.png',
 
-  url: 'https://YOUR-DOMAIN',
-  baseUrl: '/',
+  url: 'https://samuel-malec.github.io',
+  baseUrl: '/samuelmalec-blog',
 
-  organizationName: 'YOUR-GITHUB-USERNAME',
-  projectName: 'YOUR-REPOSITORY',
+  organizationName: 'samuel-malec',
+  projectName: 'samuelmalec-blog',
 
   onBrokenLinks: 'throw',
 
