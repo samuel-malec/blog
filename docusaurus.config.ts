@@ -7,10 +7,10 @@ const config: Config = {
   favicon: 'img/favicon.png',
 
   url: 'https://samuel-malec.github.io',
-  baseUrl: '/blog/',
+  baseUrl: '/',
 
   organizationName: 'samuel-malec',
-  projectName: 'blog',
+  projectName: 'personal-site',
 
   onBrokenLinks: 'throw',
 

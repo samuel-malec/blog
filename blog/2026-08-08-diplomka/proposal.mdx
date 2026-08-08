@@ -1,14 +1,14 @@
 ## Diplomka Proposal/Intro
 This document serves as a motivation and demonstration of use-cases of our work (as well as my personal notes since I forget a lot).
 
-## Graal IR Basics
+# Graal IR Basics
 Graal IR is a [sea-of-nodes](https://softlib.rice.edu/pub/CRPC-TRs/reports/CRPC-TR93366-S.pdf) (SoN) representation used by [GraalVM](https://www.graalvm.org/) compiler.
 It contains a large amount of [nodes](https://github.com/oracle/graal/blob/master/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/graph/Node.java). Each node roughly corresponds to a high level instruction such as arithmetic, memory access, or a function call.
  
 Nodes are roughly divided into two kinds:
  
-- `Fixed` nodes are pinned to a specific point in the control-flow order. They are connected to their neighbours via `successor` edges. `Invoke`, `If`, `Return`, and any node with side effects are typically fixed.
-- `Floating` nodes are constrained only by their data dependencies (which are represented by `input` edges), not by any fixed position in control flow. 
+- [Fixed](https://c9x.me/compile/bib/) nodes are pinned to a specific point in the control-flow order. They are connected to their neighbours via `successor` edges. `Invoke`, `If`, `Return`, and any node with side effects are typically fixed.
+- [Floating](https://github.com/oracle/graal/blob/5d2611cedf4c733020519b2f8feeb18a66344a5a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/nodes/calc/FloatingNode.java#L34) nodes are constrained only by their data dependencies (which are represented by `input` edges), not by any fixed position in control flow. 
 
 It is worth mentioning that the more nodes that can be classified as floating rather than fixed, the more freedom the scheduler and later optimization passes have, e.g. an `AddNode` with no side effects can float to whichever basic block is most profitable (such as being hoisted out of a loop). 
  
@@ -40,20 +40,22 @@ this is because `Fibonacci.rec` is a recursive function, and Graal IR puts a sta
  
 To quickly find more detailed examples of Graal IR. Take a look at [this](https://chrisseaton.com/truffleruby/basic-graal-graphs/) nice blog post.
  
-## Case Study I - Graal Memory Model
+# Case Study I - Graal Memory Model
 
 Ok, now that we have introduced Graal IR, we can show a concrete limitation that we would like to mitigate, but for that we need to a little more theory behind how Graal IR models memory.
 
-Graal tracks memory side effects using a concept called `LocationIdentity`. Every node that can write to memory implements either `SingleMemoryKill` (kills exactly one identity, exposed via `getKilledLocationIdentity()`) or `MultiMemoryKill` (kills several, via `getKilledLocationIdentities()`). Every node that reads from memory implements `MemoryAccess` and exposes the identity it depends on via `getLocationIdentity()`, plus a pointer to the last node that could have killed that identity via respective getter/setter.
+Graal tracks memory side effects using a concept called [LocationIdentity](https://github.com/oracle/graal/blob/5d2611cedf4c733020519b2f8feeb18a66344a5a/sdk/src/org.graalvm.word/src/org/graalvm/word/LocationIdentity.java#L55).
+Every node that can write to memory implements either `SingleMemoryKill` (kills exactly one identity, exposed via `getKilledLocationIdentity()`) or `MultiMemoryKill` (kills several, via `getKilledLocationIdentities()`). Every node that reads from memory implements `MemoryAccess` and exposes the identity it depends on via `getLocationIdentity()`, plus a pointer to the last node that could have killed that identity via respective getter/setter.
 
 `LocationIdentity` forms a small lattice:
 - `LocationIdentity.any()` is the top element, which basically conflicts with everything.
 - `NamedLocationIdentity` represents a named "family" of locations, e.g. all `int[]` elements, or a hand-picked identity for a class of internal VM fields.
 - `FieldLocationIdentity` represents one identity per declared field, shared across all instances of that field (i.e. still not per-object, but already narrower than `any()`).
 
-A memory operation's ordering relative to another (when talking about ordering we mean ordering on the `successor` relation) is decided purely by whether their identities overlap. Two operations with that touch disjoint location identities may be reordered or interleaved freely, but two operations that (might) share a location identity must stay ordered.
-
-Now we finally get to our first use case. Currently one of the most apparent limitation is that an ordinary Java method call (`InvokeNode`) has no interprocedural information available to the compiler about what it touches, so it is constructed with `identity = LocationIdentity.any()`. This makes every call a `SingleMemoryKill` on `any()`, i.e. a full memory barrier. To demonstrate, suppose this example: 
+A memory operation's ordering relative to another (when talking about ordering we mean ordering on the `successor` relation) is decided purely by whether their identities overlap. Two operations that touch disjoint location identities may be reordered or interleaved freely, but two operations that (might) share a location identity must stay ordered.
+Currently one of the most apparent limitation is that an ordinary Java method call (`InvokeNode`) has no interprocedural information available to the compiler about what memory locations it touches, 
+so it is constructed with `identity = LocationIdentity.any()`. This makes every call a `SingleMemoryKill` on `any()`, i.e. a full memory barrier.
+To demonstrate, suppose this example: 
 
 ```java
 public static class Demo {
@@ -85,13 +87,14 @@ public static class Demo {
 ```
 > Note to self: I originally had `counter.value += 1` instead of `bump(counter)`, which made Graal inline the `process` method entirely. With the `bump(counter)` version, there is an InvokeNode directly after building the Graal IR (`AnalysisStrengthenGraph` phase), but the `bump` method gets inlined, which leaves entirely the same Graal IR as before, but now the `process` method doesn't get inlined.
 
-It is obvious that `bump(counter)`'s write and `config.limit`'s read touch disjoint objects and therefore one we can easily conclude that it doesn't matter how these operations are ordered relative to each other in Graal IR, right. One might also conclude that `config.limit` never gets updated inside the loop and can be hoisted out of the loop completely. Right ? Well, let's take a look at the Graal IR of `process` method: 
+It is obvious that `bump(counter)`'s write and `config.limit`'s read are touching disjoint objects and therefore one we can easily conclude that it doesn't matter how these operations are ordered relative to each other in Graal IR, right. One might also conclude that `config.limit` never gets updated inside the loop and can be hoisted out of the loop completely. Right ? Well, let's take a look at the Graal IR of `process` method: 
 
 ![](../../static/img/process_ir.png)
 
-I know that there is a lot happening in this picture. We can see that we have a loop starting at `8 LoopBegin` node. Then we can see linearly ordered memory operations with ids `23, 24, 31`. This is strange because not only did Graal make the memory reads/writes fixed, but it also didn't hoist the read of config limit (Node 31).
+I know that there is a lot happening in this picture, and it's not really clear what to focus on in this picture, however, we can see a loop starting at `8 LoopBegin` node. 
+Then we can see linearly ordered memory operations with node ids `23, 24, 31`. This is strange because not only did Graal make the memory reads/writes fixed, but it also didn't hoist the read of config limit (Node 31) out of the loop.
 
-Ok but why does this happen ? The thing is that the `bump(counter)` invoke messes up with the LocationIdentity (essentially it introduces a complete memory-barrier) and therefore both instructions are conservatively assumed to affect the same heap state, so Graal introduces a dependency between them. This is very costly, because inside the `process` method `config.limit` never changes across loop iterations, so the read is loop-invariant and should ideally be hoisted out of the loop. But because it's forced to depend on `bump`'s `any()` memory kill, it stays pinned inside the loop body. So clearly, Invokes interfere with memory access nodes and it is a really big gap that could be one of the main things that we investigate further
+Ok but why did this happen ? The thing is that the `bump(counter)` invoke messes up with the LocationIdentity - essentially it introduces a complete memory-barrier, and therefore both instructions are conservatively assumed to affect the same heap state, so Graal introduces a dependency between them. This is very costly, because inside the `process` method `config.limit` never changes across loop iterations, so the read is loop-invariant and should ideally be hoisted out of the loop. But because it's forced to depend on `bump`'s `any()` memory kill, it stays pinned inside the loop body. So clearly, the current mechanism how Invokes interfere with memory access nodes is a really big gap. I think that this gap is one of the things our research could try to mitigate.
 
 ## Intermezzo: How we might tackle this gap
 What Graal does already support is promoting **memory accesses** from fixed to floating form. This is the actual mechanism we want to reuse/extend:
@@ -114,5 +117,7 @@ No changes to `FloatingReadPhase` or `SchedulePhase` themselves are required —
 - **Reducing reliance on aggressive inlining.** Industrial compilers lean on inlining small functions (getters/setters) specifically to extend the reach of local optimizations — at the cost of code bloat, worse instruction-cache behaviour, and AOT compile-time overhead. Lightweight interprocedural summaries (input/output side-effect tokens on the function prototype) let Graal optimize a call site without inlining the callee body.
 - **Unlocking LICM/CSE/DCE that are currently blocked.** Rigid control and memory-ordering edges between operations prevent loop-invariant reads from floating and prevent pure/repeated calls from being deduplicated or removed. Replacing those rigid edges with flexible data-dependency chains lets Graal's existing scheduler reorder and hoist freely.
 
-
 ## Case Study II - Commuting calls
+
+
+## Conclusion and Future Goals
