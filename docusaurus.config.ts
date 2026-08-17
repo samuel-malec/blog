@@ -45,6 +45,11 @@ const config: Config = {
           label: 'Blog',
           position: 'left',
         },
+        {
+          to: '/reading',
+          label: 'Reading',
+          position: 'left',
+        },
       ],
     },
 
