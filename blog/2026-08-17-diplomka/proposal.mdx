@@ -37,20 +37,15 @@ counter_heap
 logger_heap
 config_heap
 ```
-
 We will see this in a concrete example, but the intuition now is that a function modifying only `Counter` state would consume and produce the
 `counter_heap` token, while a function modifying only `Logger` state would
 consume and produce `logger_heap`.
 
-Operations on the two regions would then have no data dependency between
-their effect tokens and wouldn't need to be ordered just because
-both operations access memory.
-
-# Graal IR Basics
+## Experimental Setting
 The concrete experimental setting for this work is Native Image, which is the aot compiler inside [GraalVM](https://www.graalvm.org/). 
-In the following sections we will briefly introduce Native Image to the point where we are able to reason about some of its limitations that could be improved through our work. 
-
 Graal IR is a [sea-of-nodes](https://softlib.rice.edu/pub/CRPC-TRs/reports/CRPC-TR93366-S.pdf) (SoN) representation used by Native Image.
+In the following sections, we will go over Native Image basics, namely its IR and the way it models memory; this will help us understand the limitations and use cases of our approach later.
+
 Each [node](https://github.com/oracle/graal/blob/master/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/graph/Node.java) in Graal IR roughly corresponds to a high-level instruction such as addition, memory access, or a function call.
  
 Nodes are roughly divided into two kinds:
@@ -86,7 +81,7 @@ This is because `Fibonacci.rec` is a recursive function, and Graal IR puts a sta
  
 To quickly find more examples of Graal IR, take a look at [this](https://chrisseaton.com/truffleruby/basic-graal-graphs/) nice blog post.
 
-# Graal Memory Model
+## Graal Memory Model
 Graal tracks memory side effects using a concept called [LocationIdentity](https://github.com/oracle/graal/blob/5d2611cedf4c733020519b2f8feeb18a66344a5a/sdk/src/org.graalvm.word/src/org/graalvm/word/LocationIdentity.java#L55).
 Every node that can write to memory implements either `SingleMemoryKill` (kills exactly one identity) or `MultiMemoryKill`. Every node that reads from memory implements `MemoryAccess` and exposes the identity it depends on via `getLocationIdentity()`, and a pointer to the last node that could have killed that identity via respective getter/setter.
 
@@ -99,17 +94,16 @@ Fixed nodes are always ordered by their position in the control-flow chain, rega
 `LocationIdentity` only matters for floating memory accesses. Two floating accesses with disjoint identities can be scheduled independently of one another, whereas two accesses (potentially) sharing
 an identity must preserve their relative memory order via the `lastLocationAccess` chain built by `FloatingReadPhase`.
 
-# What problems are we trying to solve ?
+## Use Case A - Narrowing Memory Accesses
 The core issue is that Graal IR currently treats function calls as having far broader memory effects than they actually have. 
 `InvokeNode` defaults to killing `LocationIdentity.any()`, which invalidates memory-dependent optimizations, regardless of what the callee actually touches.
 This forces the compiler to serialize operations, which are independent in reality.
 
 The idea is that if we make side effects explicit in IR, the unrelated effects won't create false dependencies.
 We attempt to perform this transformation based on the points-to information Native Image already computes.
+To give concrete examples of this phenomenon, suppose the two examples below, in both the compiler has enough information to know a call couldn't have touched a given location, but Graal IR didn't encode this information, so the optimization is blocked.
 
-To give concrete examples of this phenomenon, suppose the two use cases below, in both the compiler has enough information to know a call couldn't have touched a given location, but Graal IR didn't encode this information, so the optimization is blocked.
-
-# Use Case I - Loop-Invariant Memory Access 
+# Example I - Loop-Invariant Memory Access 
 Consider:
 ```jsx
 public static class Demo {
@@ -148,7 +142,7 @@ ordered. We can see a loop starting at `8 LoopBegin` node, and we also see that 
 
 This is the `LocationIdentity.any()` problem from above: `bump(counter)` forces the read of `config.limit` to stay ordered after it, even though they touch disjoint objects.
 
-## Case Study II: Dead Store Elimination
+## Example II: Dead Store Elimination
 The concepts in this case study will be very similar to what we have already seen, however now we want to remove nodes entirely instead of doing code motion.
 Suppose:
 
@@ -171,12 +165,8 @@ We can see that the invoke of `unrelatedWork` gets inserted in Graal IR, and as 
 Not even inlining helps, the memory accesses stay fixed. 
 ![Graal IR after inlining unrelatedWork](../../static/img/dse_after_inlining.png)
 
-So the problem is not necessarily that the optimizer lacks a DSE algorithm, but it
-is that the representation does not expose enough information about which
-memory the call can affect.
-
-# Generalized Solution
-We will now demonstrate our solution in its most general form.
+# Generalized Solution of Use Case A
+We will now demonstrate a general solution, that would help us optimize this class of programs.
 Consider:
 ```text
 operation A
@@ -200,7 +190,6 @@ then `f` does not need to interfere with the dependency between `A` and `B`
 on `P1`. 
 
 Now, the problem therefore becomes: how can we obtain and represent a precise-ish description of the memory effects of a function ?
-We shall be dealing with this question during the implementation...
 
 # Implementation ( Details )
 > The following text is highly unstructured and (hopefully) will be a subject of change
