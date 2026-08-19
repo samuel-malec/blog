@@ -13,7 +13,7 @@ core techniques/ideas of the proposed work.
 The main idea is to represent side effects using explicit values. 
 A conventional function can be viewed as:
 `f : arguments → result`.
-A function with an explicit state/effect token can instead be viewed as a conventional function just with extra 'state' argument:
+A function with an explicit state/effect token can instead be viewed as a conventional function just with extra `state` argument:
 `f : state × arguments → result × state`
 
 The state token represents some portion of the program state that the function
@@ -96,7 +96,7 @@ Every node that can write to memory implements either `SingleMemoryKill` (kills 
 - `FieldLocationIdentity` represents one identity per declared field, shared across all instances of that field (i.e. still not per-object, but already narrower than `any()`).
 
 Fixed nodes are always ordered by their position in the control-flow chain, regardless of `LocationIdentity` (this is a structural property, not a memory-dependency decision).
-`LocationIdentity` only matter for floating memory accesses. Two floating accesses with disjoint identities can be scheduled independently of one another, whereas two accesses (potentially) sharing
+`LocationIdentity` only matters for floating memory accesses. Two floating accesses with disjoint identities can be scheduled independently of one another, whereas two accesses (potentially) sharing
 an identity must preserve their relative memory order via the `lastLocationAccess` chain built by `FloatingReadPhase`.
 
 # What problems are we trying to solve ?
@@ -145,22 +145,8 @@ ordered. We can see a loop starting at `8 LoopBegin` node, and we also see that 
 `24`, and `31` remain ordered, and the read of `config.limit` is not hoisted.
 
 ![](../../static/img/process_ir.png)
+
 This is the `LocationIdentity.any()` problem from above: `bump(counter)` forces the read of `config.limit` to stay ordered after it, even though they touch disjoint objects.
-
-## Existing Graal API: Floating Memory accesses 
-What Graal does already support is promoting memory accesses from fixed to floating form.
-This is the actual mechanism we would like to reuse/extend:
-
-- **`FloatingAccessNode`** is the floating counterpart of a fixed memory access. A fixed access such as `ReadNode` exposes `canFloat()`, and when it can, `asFloatingNode()` converts it into the equivalent floating node.
-- **`FloatingReadPhase`** is the compiler phase that performs this conversion. It essentially walks the fixed nodes, and for every `FloatableAccessNode` that can float, looks up the current last known kill of its location identity in a per-location map.
-- **`SchedulePhase`** is the phase that assigns floating nodes to basic blocks once they are floating. It computes the earliest/latest legal basic block for each floating node based on data dependencies.
-
-Basically, we want to narrow the `LocationIdentity` that `InvokeNode`s report.
-The good news is that `InvokeNode` already has a constructor overload accepting an explicit `LocationIdentity` instead of defaulting to `any()`. 
-If a call's kill identity is narrowed based on points-to information (e.g. tagged with a `Counter`-heap token instead of `any()`), then:
-
-- `FloatingReadClosure.processAccess`/`processCheckpoint` will only invalidate the map entry for that specific identity, instead of clearing the whole map which would mean `config.limit`'s entry survives across the `bump(counter)` call.
-SchedulePhase's memory-dependency computation can potentially become more precise because a block containing bump would no longer be considered to kill every memory location
 
 ## Case Study II: Dead Store Elimination
 The concepts in this case study will be very similar to what we have already seen, however now we want to remove nodes entirely instead of doing code motion.
@@ -231,6 +217,22 @@ So basically the entire process can be described as:
 - SSU to SoN Conversion
 
 The following text is concerned with various implementation details that we encounter throughout our work.
+
+## Existing Graal API: Floating Memory accesses 
+What Graal does already support is promoting memory accesses from fixed to floating form.
+This is the actual mechanism we would like to reuse/extend:
+
+- **`FloatingAccessNode`** is the floating counterpart of a fixed memory access. A fixed access such as `ReadNode` exposes `canFloat()`, and when it can, `asFloatingNode()` converts it into the equivalent floating node.
+- **`FloatingReadPhase`** is the compiler phase that performs this conversion. It essentially walks the fixed nodes, and for every `FloatableAccessNode` that can float, looks up the current last known kill of its location identity in a per-location map.
+- **`SchedulePhase`** is the phase that assigns floating nodes to basic blocks once they are floating. It computes the earliest/latest legal basic block for each floating node based on data dependencies.
+
+Basically, we want to narrow the `LocationIdentity` that `InvokeNode`s report.
+The good news is that `InvokeNode` already has a constructor overload accepting an explicit `LocationIdentity` instead of defaulting to `any()`. 
+If a call's kill identity is narrowed based on points-to information (e.g. tagged with a `Counter`-heap token instead of `any()`), then:
+
+- `FloatingReadClosure.processAccess`/`processCheckpoint` will only invalidate the map entry for that specific identity, instead of clearing the whole map which would mean `config.limit`'s entry survives across the `bump(counter)` call.
+SchedulePhase's memory-dependency computation can potentially become more precise because a block containing bump would no longer be considered to kill every memory location
+
 
 # Heap Modelling
 We want to divide the heap into non-overlapping abstract regions. Each region will receive its own effect token.
