@@ -289,11 +289,11 @@ The current idea is to walk the [AnalysisUniverse](https://github.com/oracle/gra
 The schema mirrors the actual entities the points-to analysis already tracks, so no additional analysis needs to be invented.
 
 Entities to export:
-### 1. Types (`AnalysisType`)
-### 2. Fields (`AnalysisField`)  
-### 3. Allocation sites / abstract objects (`AnalysisObject`)
-### 4. Type flows / call sites (`TypeFlow` subclasses)
-### 5. Type states (`TypeState`)
+- 1. Types (`AnalysisType`)
+- 2. Fields (`AnalysisField`)  
+- 3. Allocation sites / abstract objects (`AnalysisObject`)
+- 4. Type flows / call sites (`TypeFlow` subclasses)
+- 5. Type states (`TypeState`)
 
 TODO: play with context sensitivity flags
 -H:AnalysisContextSensitivity=insens     # default: context-insensitive analysis, context-insensitive heap  
