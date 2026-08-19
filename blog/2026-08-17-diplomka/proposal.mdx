@@ -190,7 +190,7 @@ is that the representation does not expose enough information about which
 memory the call can affect.
 
 # Generalized Solution
-Ok, seeing the use cases, we will now demonstrate our proposal in its most general form.
+We will now demonstrate our solution in its most general form.
 Consider:
 ```text
 operation A
@@ -213,12 +213,13 @@ B → partition P1
 then `f` does not need to interfere with the dependency between `A` and `B`
 on `P1`. 
 
-Now, the problem therefore becomes how can we obtain and represent a precise-ish description of the memory effects of a function ?
+Now, the problem therefore becomes: how can we obtain and represent a precise-ish description of the memory effects of a function ?
 We shall be dealing with this question during the implementation...
-
 
 # Implementation ( Details )
 > The following text is highly unstructured and (hopefully) will be a subject of change
+
+
 The result of this work should be a tool that performs a conversion from SoN to SSU and then back to SoN.
 Since the core transformation of IR happens outside of Graal we need to export Graal IR points-to information and process this information in our tool.
 So basically the entire process can be described as:
