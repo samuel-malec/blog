@@ -1,6 +1,6 @@
 # Diplomka Proposal
-Whole-program sound interprocedural abstract interpretation is really hard to implement efficiently and correctly.
-This is due to the sheer scope on which it has to operate, while dealing with all the related implementation details, 
+Whole-program sound interprocedural analyses are really hard to implement efficiently and correctly.
+This is due to the sheer scope on which they have to operate, while dealing with all the related implementation details, 
 such as handling context sensitivity, functions summaries, recursion, etc. 
 
 We want to sidestep this difficulty rather than solve it.
@@ -13,7 +13,7 @@ core techniques/ideas of the proposed work.
 The main idea is to represent side effects using explicit values. 
 A conventional function can be viewed as:
 `f : arguments → result`.
-A function with an explicit state/effect token can instead be viewed as:
+A function with an explicit state/effect token can instead be viewed as a conventional function just with extra 'state' argument:
 `f : state × arguments → result × state`
 
 The state token represents some portion of the program state that the function
