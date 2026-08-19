@@ -30,7 +30,6 @@ export default function Home(): ReactNode {
   return (
     <Layout
       title="Home"
-      description="ZJBlog"
     >
       <HomepageHeader />
 
@@ -38,9 +37,9 @@ export default function Home(): ReactNode {
         <section id="about" className={styles.section}>
           <div className="container">
             <div className={styles.card}>
-              <Heading as="h2">Welcome</Heading>
+              <Heading as="h2">Header</Heading>
               <p>
-                I only created this to shitpost; we'll see what the future will bring to this blog
+                Body
               </p>
             </div>
           </div>
